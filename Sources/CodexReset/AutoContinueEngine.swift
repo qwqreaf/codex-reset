@@ -106,33 +106,38 @@ final class AutoContinueEngine {
     ///   - threadId: 目标线程
     ///   - command: 注入的指令（默认「继续」）
     ///   - fallbackToGUI: 是否允许回退 GUI 自动化
-    func continueThread(client: AppServerClient?, threadId: String, command: String, fallbackToGUI: Bool) async -> Bool {
+    func continueThread(client: AppServerClient?, threadId: String, command: String, fallbackToGUI: Bool, allowAppServer: Bool = true) async -> Bool {
         var lastError = "无可用连接"
         lastFailureReason = nil
 
-        // Path A1: 使用当前 app-server 客户端（优先桌面 control socket）
-        if let client {
-            if await tryContinueViaAppServer(client: client, threadId: threadId, command: command) {
-                handledThreads.insert(threadId)
-                return true
-            } else {
-                lastError = "app-server 通道失败"
-            }
-        }
-
-        // Path A2: 尝试连接桌面 control socket（可能上次未连上）
-        let manager = AppServerManager(codexHome: codexHome)
-        if let desktopClient = try? manager.connectToDesktopControl() {
-            do {
-                try await desktopClient.initialize()
-                if await tryContinueViaAppServer(client: desktopClient, threadId: threadId, command: command) {
+        // The menu-bar app must never acquire a thread writer through an app-server.
+        // Its server connection is for quota reads only; continuation uses the desktop UI.
+        if allowAppServer {
+            // Path A1: 使用当前 app-server 客户端（优先桌面 control socket）
+            if let client {
+                if await tryContinueViaAppServer(client: client, threadId: threadId, command: command) {
                     handledThreads.insert(threadId)
                     return true
+                } else {
+                    lastError = "app-server 通道失败"
                 }
-                lastError = "桌面 app-server 通道失败"
-            } catch {
-                lastError = "桌面 app-server 初始化失败: \(error)"
             }
+
+            // Path A2: 尝试连接桌面 control socket（可能上次未连上）
+            let manager = AppServerManager(codexHome: codexHome)
+            if let desktopClient = try? manager.connectToDesktopControl() {
+                do {
+                    try await desktopClient.initialize()
+                    if await tryContinueViaAppServer(client: desktopClient, threadId: threadId, command: command) {
+                        handledThreads.insert(threadId)
+                        return true
+                    }
+                    lastError = "桌面 app-server 通道失败"
+                } catch {
+                    lastError = "桌面 app-server 初始化失败: \(error)"
+                }
+            }
+
         }
 
         // Path B: GUI 自动化回退
@@ -148,15 +153,8 @@ final class AutoContinueEngine {
                     lastError = "GUI 自动化失败: \(error)"
                 }
             } else {
-                let config = CodexConfig.load(codexHome: codexHome)
-                if config.remoteControlEnabled {
-                    // remote_control 已启用但 Codex 未重启（control socket 未出现）→ 引导重启 Codex
-                    lastError = "辅助功能授权未生效，且 remote_control 已启用但 Codex 未重启。请重启 Codex 桌面 app，之后将走官方协议通道（无需辅助功能权限）；若仍要使用辅助功能，请在系统设置重新勾选授权（注意：重新打包会改变签名导致授权失效）"
-                    onNeedRestartCodex?()
-                } else {
-                    lastError = "辅助功能未授权，无法在 Codex 中输入。请在面板「辅助功能」状态点「授权」勾选本 App（若勾选过仍提示，请重新勾选一次）"
-                    onNeedAccessibility?()
-                }
+                lastError = "Accessibility permission is required for desktop continuation. Enable CodexReset in System Settings > Privacy & Security > Accessibility."
+                onNeedAccessibility?()
             }
         }
 

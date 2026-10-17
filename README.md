@@ -1,5 +1,20 @@
 # CodexReset
 
+This is [ryoma-oss's fork](https://github.com/ryoma-oss/codex-reset) of
+[boyso/codex-reset](https://github.com/boyso/codex-reset). Original MIT license and attribution are retained.
+
+## Changes in this fork
+
+- Remove broad startup `pkill`; clean up only the server process owned by this instance when connection fails.
+- Desktop continuation sends a message through the GUI instead of starting a turn through an app-server, to avoid acquiring a conversation writer lock.
+- Prefer actual conversation names over initial messages in the chat picker.
+- Fix unreadable settings colors.
+- Show five-hour **remaining** percentage and ring in the menu bar; the panel still shows usage. Reset countdown is in the menu-bar tooltip.
+
+**Goal limitation:** this fork does not click Goal resume buttons. The experimental button automation has been removed. Sending `Continue` starts a normal turn; it does not guarantee that a paused Goal becomes active. Resume Goals manually in Codex. Do not use `/goal resume` as the GUI message: some desktop versions interpret it as a replacement Goal.
+
+GUI automation depends on focus, accessibility permission, and Codex UI behavior. It can fail or target the wrong chat if navigation does not finish; supervise manual tests before enabling automatic sends. A successful send notification is not confirmation that a Goal resumed. Some upstream notifications remain Chinese even with English selected.
+
 <img width="1280" height="258" alt="image" src="https://github.com/user-attachments/assets/766c58f1-5264-469b-b641-bfe8787caefa" />
 
 **An app that keeps Codex on the job.**
@@ -56,14 +71,11 @@ several agents/projects at once, that's a lot of babysitting.
 
 ### How auto-resume works
 
-Two channels, most reliable first:
-
-1. **Local app-server (preferred)** — talks to Codex's bundled local
-   app-server (`remote_control` or a spawned private instance) and starts a new
-   turn with your command. No accessibility permissions needed.
-2. **GUI fallback** — if the desktop app holds the current conversation, it
-   deep-links into Codex, focuses the input box, pastes your command and sends
-   it with **⌘Enter** (requires **Accessibility** permission).
+The menu-bar app reads quota information through a local app-server. For
+continuation it deep-links into Codex, focuses the composer, pastes the configured
+message, and sends **⌘Enter**. Accessibility permission is required. It does not
+use the app-server to start turns. The optional upstream `--continue` CLI mode
+still uses its original app-server-first behavior.
 
 ## Requirements
 
@@ -77,7 +89,7 @@ Two channels, most reliable first:
 ### Build
 
 ```bash
-git clone https://github.com/boyso/codex-reset.git
+git clone https://github.com/ryoma-oss/codex-reset.git
 cd codex-reset
 swift build -c release
 ```
@@ -95,9 +107,9 @@ Then click the menu-bar icon to open the panel. Optionally:
   Privacy & Security → Accessibility) so the GUI fallback channel can type into
   Codex. The panel shows a live "Accessibility" status so you know when it's
   granted.
-- Enable **remote_control** (toggle in the panel, then restart the Codex app)
-  to use the official local protocol channel — no accessibility permission
-  needed, and it survives re-signing.
+- **remote_control** can be used for local quota queries. Desktop continuation
+  still requires Accessibility permission. Rebuilding with an ad-hoc signature
+  can require granting that permission again.
 
 ### CLI only
 

@@ -20,6 +20,7 @@ struct SettingsPanelView: View {
         .padding(16)
         .frame(width: 340)
         .background(Color(red: 0.95, green: 0.945, blue: 0.93))
+        .preferredColorScheme(.light)
     }
 
     /// 语言选择绑定到 AppModel.language（切换后经 objectWillChange 刷新全界面）
@@ -78,7 +79,7 @@ struct SettingsPanelView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 Text(L("通过 Codex 本地协议继续对话：重启 Codex 后生效，无需辅助功能授权",
-                       "Continues chats via Codex's local protocol: takes effect after Codex restarts, no accessibility permission needed."))
+                       "Connects to the desktop server for usage queries after Codex restarts. Continuing chats uses GUI automation and requires Accessibility permission."))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

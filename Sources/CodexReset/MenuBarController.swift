@@ -71,25 +71,17 @@ final class MenuBarController: NSObject {
             return
         }
 
-        let used = primary.usedPercent
-        if used >= 100 {
-            // 已到上限：红色满环 + 恢复倒计时
-            button.image = usageRingImage(percent: used)
-            if let countdown = model.countdownText() {
-                button.title = "⏳ \(countdown)"
-            } else {
-                button.title = "⏳ " + L("已到上限", "limit reached")
-            }
-        } else {
-            // 正常：用量进度环 + 百分比
-            button.image = usageRingImage(percent: used)
-            button.title = "\(used)%"
-        }
+        let used = min(max(primary.usedPercent, 0), 100)
+        let remaining = 100 - used
+        button.image = remainingRingImage(used: used)
+        button.title = "\(remaining)%"
+        let reset = model.countdownText().map { " · Reset in " + $0 } ?? ""
+        button.toolTip = "5h remaining: \(remaining)% · Used: \(used)%" + reset
     }
 
-    /// 绘制用量进度环（深/浅菜单栏均清晰）：灰底环 + 彩色用量弧
-    private func usageRingImage(percent: Int) -> NSImage {
-        let pct = min(max(percent, 0), 100)
+    /// Remaining-quota ring; warning colors still depend on usage.
+    private func remainingRingImage(used: Int) -> NSImage {
+        let pct = 100 - min(max(used, 0), 100)
         // 2 倍尺寸绘制，缩小后更锐利
         let backing = NSImage(size: NSSize(width: 36, height: 36))
         backing.lockFocus()
@@ -103,9 +95,9 @@ final class MenuBarController: NSObject {
         track.stroke()
 
         if pct > 0 {
-            let arcColor: NSColor = pct >= 100
+            let arcColor: NSColor = used >= 100
                 ? .systemRed
-                : (pct >= 80 ? .systemOrange : .systemGreen)
+                : (used >= 80 ? .systemOrange : .systemGreen)
             let frac = CGFloat(pct) / 100.0
             let arc = NSBezierPath()
             arc.lineWidth = lineWidth
@@ -114,7 +106,7 @@ final class MenuBarController: NSObject {
                 withCenter: NSPoint(x: rect.midX, y: rect.midY),
                 radius: rect.width / 2,
                 startAngle: 90,          // 12 点方向开始
-                endAngle: 90 - 360 * frac, // 顺时针扫过 used%
+                endAngle: 90 - 360 * frac, // Remaining quota arc
                 clockwise: true
             )
             arcColor.setStroke()
@@ -133,6 +125,7 @@ final class MenuBarController: NSObject {
                 hosting.sizingOptions = [.preferredContentSize]
             }
             let win = NSWindow(contentViewController: hosting)
+            win.appearance = NSAppearance(named: .aqua)
             win.title = L("CodexReset 设置", "CodexReset Settings")
             win.styleMask = [.titled, .closable, .utilityWindow]
             win.isReleasedWhenClosed = false

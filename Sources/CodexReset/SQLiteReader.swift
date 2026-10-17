@@ -65,7 +65,7 @@ final class SQLiteReader {
     /// 列出所有对话（含未暂停的），按项目分组用；过滤归档与子代理线程，最新在前
     func allThreads(limit: Int = 1000) -> [PausedThread] {
         guard let rows = queryRows(path: stateDbPath, sql: """
-            SELECT id, title, cwd, updated_at
+            SELECT id, COALESCE(NULLIF(TRIM(name), ''), title), cwd, updated_at
             FROM threads
             WHERE archived = 0 AND source NOT LIKE '{"subagent"%'
             ORDER BY updated_at_ms DESC
@@ -98,45 +98,55 @@ final class SQLiteReader {
                  args: [threadId])?[0] as? String
     }
 
-    /// 标题回退：state 库无记录时，从该线程最早一条 userMessage 提取前 40 字作为标题
+    /// Prefer the visible Codex chat name. The legacy title often contains the
+    /// entire initial prompt, so unnamed chats use the newest meaningful user text.
     private func fallbackTitle(threadId: String) -> String? {
-        guard let row = queryRow(path: threadHistoryPath, sql: """
-            SELECT item_json
-            FROM thread_items
+        guard let rows = queryRows(path: threadHistoryPath, sql: """
+            SELECT item_json FROM thread_items
             WHERE thread_id = ? AND item_type = 'userMessage'
-            ORDER BY rollout_ordinal ASC
-            LIMIT 1
-        """, args: [threadId]),
-        let json = row[0] as? String,
-        let data = json.data(using: .utf8),
-        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let content = obj["content"] as? [[String: Any]],
-        let first = content.first,
-        let text = first["text"] as? String else { return nil }
-
-        let cleaned = text
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return nil }
-        return String(cleaned.prefix(40))
+            ORDER BY rollout_ordinal DESC LIMIT 30
+        """, args: [threadId]) else { return nil }
+        for row in rows {
+            guard let json = row[0] as? String,
+                  let data = json.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = obj["content"] as? [[String: Any]] else { continue }
+            let text = content.compactMap { $0["text"] as? String }.joined(separator: " ")
+            let cleaned = compactTitle(text)
+            if !cleaned.isEmpty && !isContinuation(cleaned) && !cleaned.hasPrefix("<environment_context>") {
+                return cleaned
+            }
+        }
+        return nil
     }
 
-    /// 显示用标题：Codex 会把对话标题自动更新为最新一条 userMessage（如自动发送的「继续」），
-    /// 导致列表标题变成「继续」等无意义短标题。这里做智能回退：
-    /// 优先用 state 标题；若它是无意义的短标题（<=2 字，如「继续」），回退到最早 userMessage（原始任务）。
+    private func compactTitle(_ text: String) -> String {
+        let cleaned = text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return cleaned.count > 80 ? String(cleaned.prefix(80)) + "…" : cleaned
+    }
+
+    private func isContinuation(_ text: String) -> Bool {
+        ["continue", "继续", "続けて", "/goal resume"].contains(text.lowercased())
+    }
+
     private func displayTitle(threadId: String, stateTitle: String?) -> String {
-        if let stateTitle, !stateTitle.isEmpty, stateTitle.count >= 3 {
-            return stateTitle
+        if let name = queryRow(path: stateDbPath,
+                               sql: "SELECT name FROM threads WHERE id = ?",
+                               args: [threadId])?[0] as? String {
+            let cleaned = compactTitle(name)
+            if !cleaned.isEmpty { return cleaned }
         }
-        if let fb = fallbackTitle(threadId: threadId), !fb.isEmpty {
-            return fb
+        if let latest = fallbackTitle(threadId: threadId) { return latest }
+        if let stateTitle {
+            let cleaned = compactTitle(stateTitle)
+            if !cleaned.isEmpty && !isContinuation(cleaned) { return cleaned }
         }
-        return stateTitle ?? "未命名对话"
+        return "Untitled chat (" + String(threadId.prefix(8)) + ")"
     }
 
     private func threadTitle(threadId: String) -> String? {
         queryRow(path: stateDbPath,
-                 sql: "SELECT title FROM threads WHERE id = ?",
+                 sql: "SELECT COALESCE(NULLIF(TRIM(name), ''), title) FROM threads WHERE id = ?",
                  args: [threadId])?[0] as? String
     }
 

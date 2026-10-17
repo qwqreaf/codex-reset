@@ -397,7 +397,8 @@ final class AppModel: ObservableObject {
             client: client,
             threadId: paused.threadId,
             command: continueCommand,
-            fallbackToGUI: true
+            fallbackToGUI: true,
+            allowAppServer: false
         )
         isWorking = false
         if ok {
