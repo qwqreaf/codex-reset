@@ -566,6 +566,15 @@ struct ContentView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+            Button(L("打开日志文件夹（保留7天）", "Open log folder (7-day archive)")) {
+                NSWorkspace.shared.open(model.activityLogStore.directory)
+            }
+            .font(.caption)
+            if let error = model.logArchiveError {
+                Text("Log archive error: \(error)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             if model.logLines.isEmpty {
                 Text(L("暂无日志", "No logs yet"))
                     .font(.caption)

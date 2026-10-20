@@ -3,6 +3,25 @@
 This is [ryoma-oss's fork](https://github.com/ryoma-oss/codex-reset) of
 [boyso/codex-reset](https://github.com/boyso/codex-reset). Original MIT license and attribution are retained.
 
+## Activity log archive
+
+Logs are written locally to `~/Library/Logs/CodexReset/activity-YYYY-MM-DD.jsonl`
+(UTC file names, ISO 8601 timestamps, Chinese and English messages). On startup
+and each log write, entries older than seven days are removed. If the app is
+not running, cleanup happens at the next launch. The Log tab shows the most
+recent 1,000 entries, restores them after restart, and provides an **Open log
+folder** button. The files retain all entries within seven days without the UI
+entry limit. Run the archive regression checks with:
+
+```bash
+swiftc Sources/CodexReset/ActivityLogStore.swift Tests/ActivityLogArchive/main.swift -o /tmp/codexreset-log-test
+/tmp/codexreset-log-test
+```
+
+Archive errors appear in the Log tab. Existing in-memory logs from
+older builds cannot be recovered automatically. Logs may contain local paths,
+chat names, configured commands and error details; they stay on this Mac.
+
 ## Changes in this fork
 
 - Remove broad startup `pkill`; clean up only the server process owned by this instance when connection fails.

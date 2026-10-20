@@ -23,6 +23,9 @@ final class AppModel: ObservableObject {
     /// 勾选、需要在恢复后自动继续的对话
     @Published var selectedThreadIds: Set<String> = []
     @Published var logLines: [LogEntry] = []
+    @Published var logArchiveError: String?
+    let activityLogStore = ActivityLogStore()
+    private let visibleLogLimit = 1000
     @Published var autoContinue: Bool {
         didSet { UserDefaults.standard.set(autoContinue, forKey: "autoContinue") }
     }
@@ -86,6 +89,15 @@ final class AppModel: ObservableObject {
     // MARK: - 启动
 
     func start() {
+        do {
+            logLines = try activityLogStore.recent(limit: visibleLogLimit).map { entry in
+                let formatter = DateFormatter()
+                formatter.dateFormat = "MM-dd HH:mm:ss"
+                return LogEntry(time: formatter.string(from: entry.timestamp), zh: entry.zh, en: entry.en)
+            }
+        } catch {
+            logArchiveError = String(describing: error)
+        }
         appendLog("CodexReset 启动，CODEX_HOME=\(codexHome)", "CodexReset started, CODEX_HOME=\(codexHome)")
         // Never terminate servers by command-line pattern: other applications own them.
         // 暂停对话列表来自本地 sqlite，不依赖 app-server，立即加载
@@ -485,11 +497,19 @@ final class AppModel: ObservableObject {
     // MARK: - 工具
 
     private func appendLog(_ zh: String, _ en: String) {
+        let now = Date()
         let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        let stamp = formatter.string(from: Date())
+        formatter.dateFormat = "MM-dd HH:mm:ss"
+        let stamp = formatter.string(from: now)
         logLines.append(LogEntry(time: stamp, zh: zh, en: en))
-        if logLines.count > 100 { logLines.removeFirst(logLines.count - 100) }
+        if logLines.count > visibleLogLimit { logLines.removeFirst(logLines.count - visibleLogLimit) }
+        do {
+            try activityLogStore.append(StoredLogEntry(timestamp: now, zh: zh, en: en), now: now)
+            logArchiveError = nil
+        } catch {
+            logArchiveError = String(describing: error)
+            NSLog("CodexReset activity log write failed: %@", String(describing: error))
+        }
     }
 
     private func notify(title: String, body: String) {
