@@ -13,15 +13,20 @@ activation. Delayed history writes may cause an unconfirmed result even when the
 message was sent; inspect the chat before retrying. There is no automatic retry; unconfirmed delivery stops the rest of that batch.
 The handled-chat set resets when quota transitions from limited to available,
 so a previous manual test does not suppress a later recovery cycle. Overlapping
-manual and automatic batches are blocked. GUI navigation/focus remains dependent
-on the desktop UI; history verification detects an unconfirmed target delivery
-but cannot undo input mistakenly sent to another chat.
+manual and automatic batches are blocked. Target and editor focus are checked before input; missing or ambiguous accessibility controls stop the operation.
 
 Delivery regression checks:
 
 ```bash
 swiftc -lsqlite3 Sources/CodexReset/DeliveryReceipt.swift Tests/DeliveryReceipt/main.swift -o /tmp/codexreset-delivery-test
 /tmp/codexreset-delivery-test
+```
+
+Goal/draft regression checks (no live UI input):
+
+```bash
+swiftc -parse-as-library -lsqlite3 Sources/CodexReset/GoalState.swift Sources/CodexReset/DesktopGoalAutomation.swift Sources/CodexReset/SQLiteReader.swift Tests/GoalAndMessage/Test.swift -o /tmp/codexreset-goal-test
+/tmp/codexreset-goal-test
 ```
 
 ## Activity log archive
@@ -51,9 +56,9 @@ chat names, configured commands and error details; they stay on this Mac.
 - Fix unreadable settings colors.
 - Show five-hour **remaining** percentage and ring in the menu bar; the panel still shows usage. Reset countdown is in the menu-bar tooltip.
 
-**Goal limitation:** this fork does not click Goal resume buttons. The experimental button automation has been removed. Sending `Continue` starts a normal turn; it does not guarantee that a paused Goal becomes active. Resume Goals manually in Codex. Do not use `/goal resume` as the GUI message: some desktop versions interpret it as a replacement Goal.
+**Goal resume + message:** **Resume Goal before sending** is enabled by default in Settings. The app verifies the target chat through an exact window title or a selected accessibility item, clicks one uniquely labeled resume button for a `paused`/`usage_limited` Goal, waits up to 15 seconds for the same Goal to become `active`, and only then sends the command. Already-active Goals skip the button. Chats without a local Goal only receive the command; other Goal states stop the batch. Goal databases are read-only; no app-server thread writer is acquired.
 
-GUI automation depends on focus, accessibility permission, and Codex UI behavior. It can fail or target the wrong chat if navigation does not finish; supervise manual tests before enabling automatic sends. A successful notification requires a new matching user message in the target chat history within 15 seconds; it does not confirm that a Goal resumed. Unconfirmed sends are not retried automatically. Some upstream notifications remain Chinese even with English selected.
+This feature requires Accessibility permission and depends on Codex's accessibility tree. Japanese `目標を再開`, English `Resume goal`, and Chinese labels are supported. Missing/ambiguous controls, changed focus, or unconfirmed activation stop the operation before Continue. Composer identification requires one readable multiline editor. A matching existing command is reused; a different draft is preserved and stops the batch. The developer's computer-use tool cannot control Codex itself: **the new UI path has not yet been validated end to end**. Initial testing must be performed by the user with one selected chat. Some upstream notifications remain Chinese with English selected.
 
 <img width="1280" height="258" alt="image" src="https://github.com/user-attachments/assets/766c58f1-5264-469b-b641-bfe8787caefa" />
 

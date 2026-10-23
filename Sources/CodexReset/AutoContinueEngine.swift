@@ -5,42 +5,6 @@ import ApplicationServices
 /// GUI 自动化回退（Path B）：先用深链打开 Codex 对应对话，再粘贴「继续」并回车。
 /// 依赖辅助功能权限（System Events）。
 struct AppleScriptAutomation {
-    static func sendContinue(threadId: String, command: String) throws {
-        let escaped = command
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        // 1) 深链打开/切换到对应对话，并等待界面加载（大对话可能需要一点时间）
-        if let url = URL(string: "codex://threads/\(threadId)") {
-            NSWorkspace.shared.open(url)
-        }
-        Thread.sleep(forTimeInterval: 3.0)
-        // 2) 激活 Codex（进程名为 ChatGPT）→ 点击输入框确保焦点 → 粘贴「继续」→ Enter 发送
-        //    关键：必须先点击输入框，否则 keystroke v 会粘贴到当前焦点（可能是对话列表）而静默失效
-        let script = """
-        set the clipboard to "\(escaped)"
-        tell application id "com.openai.codex" to activate
-        delay 2.0
-        tell application "System Events"
-            tell process "ChatGPT"
-                set frontmost to true
-                try
-                    set win to front window
-                    set p to position of win
-                    set s to size of win
-                    set cx to (item 1 of p) + (item 1 of s) / 2
-                    set cy to (item 2 of p) + (item 2 of s) - 55
-                    click at {cx, cy}
-                end try
-            end tell
-            delay 0.6
-            keystroke "v" using command down
-            delay 0.5
-            key code 36
-        end tell
-        """
-        try runAppleScript(script)
-    }
-
     static func activateApp() throws {
         try runAppleScript(#"tell application id "com.openai.codex" to activate"#)
     }
@@ -108,7 +72,7 @@ final class AutoContinueEngine {
     ///   - threadId: 目标线程
     ///   - command: 注入的指令（默认「继续」）
     ///   - fallbackToGUI: 是否允许回退 GUI 自动化
-    func continueThread(client: AppServerClient?, threadId: String, command: String, fallbackToGUI: Bool, allowAppServer: Bool = true) async -> Bool {
+    func continueThread(client: AppServerClient?, threadId: String, command: String, fallbackToGUI: Bool, allowAppServer: Bool = true, resumeGoalBeforeSending: Bool = true) async -> Bool {
         var lastError = "无可用连接"
         lastFailureReason = nil
 
@@ -151,7 +115,10 @@ final class AutoContinueEngine {
                     let before = try receipt.snapshot(threadId: threadId)
                     onLog?("开始 GUI 发送，等待聊天记录确认：\(threadId)",
                            "GUI send attempt: thread=\(threadId), key=Enter, baseline=\(before)")
-                    try AppleScriptAutomation.sendContinue(threadId: threadId, command: command)
+                    let automation = await DesktopGoalAutomation(
+                        codexHome: codexHome, threadId: threadId, resumeGoal: resumeGoalBeforeSending,
+                        log: { [weak self] message in self?.onLog?(message, message) })
+                    try await automation.send(command: command)
                     var confirmed = false
                     for _ in 0..<30 {
                         if try receipt.received(threadId: threadId, command: command, after: before) {

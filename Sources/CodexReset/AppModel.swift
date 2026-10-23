@@ -32,6 +32,9 @@ final class AppModel: ObservableObject {
     @Published var continueCommand: String {
         didSet { UserDefaults.standard.set(continueCommand, forKey: "continueCommand") }
     }
+    @Published var resumeGoalBeforeSending: Bool {
+        didSet { UserDefaults.standard.set(resumeGoalBeforeSending, forKey: "resumeGoalBeforeSending") }
+    }
     @Published var isWorking = false
     @Published var remoteControlEnabled: Bool
     /// 语言设置：system / zh / en（切换后写回 UserDefaults 并通过 objectWillChange 触发界面刷新）
@@ -64,6 +67,7 @@ final class AppModel: ObservableObject {
         self.manager = AppServerManager(codexHome: codexHome)
         self.reader = SQLiteReader(codexHome: codexHome)
         self.engine = AutoContinueEngine(codexHome: codexHome)
+        self.resumeGoalBeforeSending = UserDefaults.standard.object(forKey: "resumeGoalBeforeSending") as? Bool ?? true
         self.autoContinue = UserDefaults.standard.object(forKey: "autoContinue") as? Bool ?? true
         self.continueCommand = UserDefaults.standard.string(forKey: "continueCommand") ?? L("继续", "Continue")
         self.remoteControlEnabled = CodexConfig.load(codexHome: codexHome).remoteControlEnabled
@@ -422,11 +426,12 @@ final class AppModel: ObservableObject {
             threadId: paused.threadId,
             command: continueCommand,
             fallbackToGUI: true,
-            allowAppServer: false
+            allowAppServer: false,
+            resumeGoalBeforeSending: resumeGoalBeforeSending
         )
         isWorking = false
         if ok {
-            notify(title: "Message delivery confirmed", body: "\(paused.title): \(continueCommand). Goal activation is not verified.")
+            notify(title: "Message delivery confirmed", body: "\(paused.title): \(continueCommand). See activity log for Goal state.")
         } else {
             // 手动/自动失败都要明确反馈（辅助功能引导走 engine.onNeedAccessibility 通知，不自动弹系统设置）
             let reason = engine.lastFailureReason ?? "未知原因"
