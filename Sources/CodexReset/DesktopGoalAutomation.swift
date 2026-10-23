@@ -25,7 +25,7 @@ struct DesktopGoalAutomation {
               chats.filter({ $0.title == title }).count == 1 else {
             throw desktopError("Target chat title is missing or ambiguous. Nothing clicked or typed.")
         }
-        let original = try GoalState.read(codexHome: codexHome, threadId: threadId)
+        let original = try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log)
         if resumeGoal, let original, original.action == .refuse {
             throw desktopError("Goal status=\(original.status); only paused/usage_limited Goals can be resumed. Nothing sent.")
         }
@@ -46,7 +46,7 @@ struct DesktopGoalAutomation {
         }
         try verifyFront(app, root: root, window: window, title: title)
         if resumeGoal, let original, original.action == .resume {
-            guard try GoalState.read(codexHome: codexHome, threadId: threadId) == original else {
+            guard try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log) == original else {
                 throw desktopError("Goal changed before click; stopped")
             }
             let candidates = elements(window).filter { element in
@@ -64,7 +64,7 @@ struct DesktopGoalAutomation {
             log("Goal resume button clicked once: thread=\(threadId), goal=\(original.id)")
             var active = false
             for _ in 0..<30 {
-                let current = try GoalState.read(codexHome: codexHome, threadId: threadId)
+                let current = try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log)
                 guard current?.id == original.id else { throw desktopError("Goal was replaced or removed after click; Continue withheld") }
                 if current?.status == "active" { active = true; break }
                 try await Task.sleep(nanoseconds: 500_000_000)
@@ -76,7 +76,7 @@ struct DesktopGoalAutomation {
         }
         try verifyFront(app, root: root, window: window, title: title)
         if resumeGoal, let original {
-            let current = try GoalState.read(codexHome: codexHome, threadId: threadId)
+            let current = try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log)
             guard current?.id == original.id, current?.status == "active" else { throw desktopError("Goal is no longer active; Continue withheld") }
         }
         // Only one visible multiline editor is accepted; never guess composer coordinates.

@@ -28,6 +28,29 @@ import SQLite3
         }
         let absent = try GoalState.read(codexHome: dir.path, threadId: "' OR 1=1 --")
         precondition(absent == nil)
+        // Exercise a real prepare-time lock using a separate connection on a worker.
+        let ready = DispatchSemaphore(value: 0)
+        let released = DispatchSemaphore(value: 0)
+        let databasePath = dir.appendingPathComponent("goals_1.sqlite").path
+        DispatchQueue.global().async {
+            var lockDB: OpaquePointer?
+            precondition(sqlite3_open(databasePath, &lockDB) == SQLITE_OK)
+            precondition(sqlite3_exec(lockDB, "BEGIN EXCLUSIVE", nil, nil, nil) == SQLITE_OK)
+            ready.signal()
+            Thread.sleep(forTimeInterval: 0.85)
+            precondition(sqlite3_exec(lockDB, "COMMIT", nil, nil, nil) == SQLITE_OK)
+            sqlite3_close(lockDB)
+            released.signal()
+        }
+        ready.wait()
+        var retryCount = 0
+        let recovered = try GoalState.read(codexHome: dir.path, threadId: "target", onRetry: { _ in retryCount += 1 })
+        released.wait()
+        precondition(recovered?.id == "same-goal" && retryCount > 0)
+        // A real missing table must retain its SQLite reason, not a generic schema label.
+        sql("ALTER TABLE thread_goals RENAME TO missing_goal_table")
+        do { _ = try GoalState.read(codexHome: dir.path, threadId: "target"); fatalError("Expected schema error") }
+        catch { precondition(error.localizedDescription.contains("no such table")) }
         precondition(DesktopGoalAutomation.resumeLabels.contains("目標を再開"))
         precondition(!DesktopGoalAutomation.resumeLabels.contains("Resume"), "Generic buttons must not match")
         print("PASS: paused/usage_limited resume, active sends, other states refuse; bound SQL. No live UI events executed.")
