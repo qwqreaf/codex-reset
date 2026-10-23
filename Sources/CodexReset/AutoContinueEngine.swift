@@ -14,7 +14,7 @@ struct AppleScriptAutomation {
             NSWorkspace.shared.open(url)
         }
         Thread.sleep(forTimeInterval: 3.0)
-        // 2) 激活 Codex（进程名为 ChatGPT）→ 点击输入框确保焦点 → 粘贴「继续」→ Cmd+Enter 发送
+        // 2) 激活 Codex（进程名为 ChatGPT）→ 点击输入框确保焦点 → 粘贴「继续」→ Enter 发送
         //    关键：必须先点击输入框，否则 keystroke v 会粘贴到当前焦点（可能是对话列表）而静默失效
         let script = """
         set the clipboard to "\(escaped)"
@@ -35,7 +35,7 @@ struct AppleScriptAutomation {
             delay 0.6
             keystroke "v" using command down
             delay 0.5
-            key code 36 using command down
+            key code 36
         end tell
         """
         try runAppleScript(script)
@@ -82,7 +82,7 @@ struct AppleScriptAutomation {
 final class AutoContinueEngine {
     let codexHome: String
     /// 已处理过的线程，避免重复继续
-    private var handledThreads: Set<String> = []
+    private var recoveryCycle = RecoveryCycle()
 
     var onLog: ((String, String) -> Void)?
     /// 需要重启 Codex 以启用 remote_control 时的回调（用于弹通知引导）
@@ -97,8 +97,10 @@ final class AutoContinueEngine {
     }
 
     func alreadyHandled(_ threadId: String) -> Bool {
-        handledThreads.contains(threadId)
+        recoveryCycle.contains(threadId)
     }
+
+    func beginRecoveryCycle() { recoveryCycle.begin() }
 
     /// 继续指定线程。返回是否成功。
     /// - Parameters:
@@ -116,7 +118,7 @@ final class AutoContinueEngine {
             // Path A1: 使用当前 app-server 客户端（优先桌面 control socket）
             if let client {
                 if await tryContinueViaAppServer(client: client, threadId: threadId, command: command) {
-                    handledThreads.insert(threadId)
+                    recoveryCycle.confirm(threadId)
                     return true
                 } else {
                     lastError = "app-server 通道失败"
@@ -129,7 +131,7 @@ final class AutoContinueEngine {
                 do {
                     try await desktopClient.initialize()
                     if await tryContinueViaAppServer(client: desktopClient, threadId: threadId, command: command) {
-                        handledThreads.insert(threadId)
+                        recoveryCycle.confirm(threadId)
                         return true
                     }
                     lastError = "桌面 app-server 通道失败"
@@ -144,10 +146,28 @@ final class AutoContinueEngine {
         if fallbackToGUI {
             if AppleScriptAutomation.hasAccessibilityPermission() {
                 do {
+                    let receipt = DeliveryReceipt(codexHome: codexHome)
+                    // Fail before typing if local delivery evidence cannot be read.
+                    let before = try receipt.snapshot(threadId: threadId)
+                    onLog?("开始 GUI 发送，等待聊天记录确认：\(threadId)",
+                           "GUI send attempt: thread=\(threadId), key=Enter, baseline=\(before)")
                     try AppleScriptAutomation.sendContinue(threadId: threadId, command: command)
-                    onLog?("已通过 GUI 自动化发送「\(command)」（深链打开对话并粘贴）",
-                           "Sent \"\(command)\" via GUI automation (deep-linked into the chat and pasted)")
-                    handledThreads.insert(threadId)
+                    var confirmed = false
+                    for _ in 0..<30 {
+                        if try receipt.received(threadId: threadId, command: command, after: before) {
+                            confirmed = true
+                            break
+                        }
+                        try await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                    guard confirmed else {
+                        throw NSError(domain: "CodexReset.Delivery", code: 1,
+                            userInfo: [NSLocalizedDescriptionKey:
+                                "Delivery unconfirmed: no new matching message in target chat after 15s. Nothing will be retried automatically; inspect the composer before retrying."])
+                    }
+                    onLog?("已确认目标聊天收到消息：\(threadId)",
+                           "Delivery confirmed in target chat: thread=\(threadId), command=\(command)")
+                    recoveryCycle.confirm(threadId)
                     return true
                 } catch {
                     lastError = "GUI 自动化失败: \(error)"

@@ -3,6 +3,27 @@
 This is [ryoma-oss's fork](https://github.com/ryoma-oss/codex-reset) of
 [boyso/codex-reset](https://github.com/boyso/codex-reset). Original MIT license and attribution are retained.
 
+## Desktop delivery verification
+
+GUI sends use **Enter**. Codex must be configured to send messages with Enter.
+Before typing, the app reads the target chat's last user-message ordinal from
+local history. It reports success only after a new matching message appears in
+that same chat within 15 seconds. This confirms delivery, not execution or Goal
+activation. Delayed history writes may cause an unconfirmed result even when the
+message was sent; inspect the chat before retrying. There is no automatic retry; unconfirmed delivery stops the rest of that batch.
+The handled-chat set resets when quota transitions from limited to available,
+so a previous manual test does not suppress a later recovery cycle. Overlapping
+manual and automatic batches are blocked. GUI navigation/focus remains dependent
+on the desktop UI; history verification detects an unconfirmed target delivery
+but cannot undo input mistakenly sent to another chat.
+
+Delivery regression checks:
+
+```bash
+swiftc -lsqlite3 Sources/CodexReset/DeliveryReceipt.swift Tests/DeliveryReceipt/main.swift -o /tmp/codexreset-delivery-test
+/tmp/codexreset-delivery-test
+```
+
 ## Activity log archive
 
 Logs are written locally to `~/Library/Logs/CodexReset/activity-YYYY-MM-DD.jsonl`
@@ -32,7 +53,7 @@ chat names, configured commands and error details; they stay on this Mac.
 
 **Goal limitation:** this fork does not click Goal resume buttons. The experimental button automation has been removed. Sending `Continue` starts a normal turn; it does not guarantee that a paused Goal becomes active. Resume Goals manually in Codex. Do not use `/goal resume` as the GUI message: some desktop versions interpret it as a replacement Goal.
 
-GUI automation depends on focus, accessibility permission, and Codex UI behavior. It can fail or target the wrong chat if navigation does not finish; supervise manual tests before enabling automatic sends. A successful send notification is not confirmation that a Goal resumed. Some upstream notifications remain Chinese even with English selected.
+GUI automation depends on focus, accessibility permission, and Codex UI behavior. It can fail or target the wrong chat if navigation does not finish; supervise manual tests before enabling automatic sends. A successful notification requires a new matching user message in the target chat history within 15 seconds; it does not confirm that a Goal resumed. Unconfirmed sends are not retried automatically. Some upstream notifications remain Chinese even with English selected.
 
 <img width="1280" height="258" alt="image" src="https://github.com/user-attachments/assets/766c58f1-5264-469b-b641-bfe8787caefa" />
 
@@ -92,7 +113,7 @@ several agents/projects at once, that's a lot of babysitting.
 
 The menu-bar app reads quota information through a local app-server. For
 continuation it deep-links into Codex, focuses the composer, pastes the configured
-message, and sends **⌘Enter**. Accessibility permission is required. It does not
+message, and sends **Enter**. Accessibility permission is required. It does not
 use the app-server to start turns. The optional upstream `--continue` CLI mode
 still uses its original app-server-first behavior.
 

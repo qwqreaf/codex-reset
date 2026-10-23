@@ -57,6 +57,7 @@ final class AppModel: ObservableObject {
     private var timer: Timer?
     /// 记录上一次是否处于「已到上限」状态，用于恢复检测
     private var wasLimited = false
+    private var continuationInProgress = false
 
     init(codexHome: String = AppModel.defaultCodexHome()) {
         self.codexHome = codexHome
@@ -367,6 +368,7 @@ final class AppModel: ObservableObject {
         let recovered = wasLimited && !isLimited
 
         if recovered {
+            engine.beginRecoveryCycle()
             appendLog("检测到用量恢复！usedPercent=\(primary?.usedPercent ?? -1)%", "Usage recovered! usedPercent=\(primary?.usedPercent ?? -1)%")
             notify(title: "Codex 用量已恢复", body: "正在自动继续上次暂停的对话…")
             Task { await autoContinueIfNeeded() }
@@ -378,6 +380,12 @@ final class AppModel: ObservableObject {
     /// 到点自动继续：对所有勾选的对话（暂停 + 全部）逐个发送「继续」
     func autoContinueIfNeeded() async {
         guard autoContinue else { return }
+        guard !continuationInProgress else {
+            appendLog("已有发送操作正在进行，跳过重叠操作", "Continue batch already running; skipping overlapping recovery")
+            return
+        }
+        continuationInProgress = true
+        defer { continuationInProgress = false }
         refreshPausedThreads()
         let targets = selectedTargets()
         guard !targets.isEmpty else {
@@ -396,12 +404,16 @@ final class AppModel: ObservableObject {
                 appendLog("已处理过「\(paused.title)」，跳过", "Already handled \"\(paused.title)\"; skipping")
                 continue
             }
-            await continueOne(paused: paused, auto: true)
+            guard await continueOne(paused: paused, auto: true) else {
+                appendLog("发送未确认，停止后续对话操作", "Delivery not confirmed; stopping remaining chats in this batch")
+                return
+            }
         }
     }
 
     /// 对单个对话执行继续
-    private func continueOne(paused: PausedThread, auto: Bool) async {
+    @discardableResult
+    private func continueOne(paused: PausedThread, auto: Bool) async -> Bool {
         isWorking = true
         appendLog("\(auto ? "自动" : "手动")继续：\(paused.title)",
                   "\(auto ? "Auto" : "Manual") continue: \(paused.title)")
@@ -414,16 +426,20 @@ final class AppModel: ObservableObject {
         )
         isWorking = false
         if ok {
-            notify(title: "Codex 已继续", body: "已对「\(paused.title)」发送「\(continueCommand)」")
+            notify(title: "Message delivery confirmed", body: "\(paused.title): \(continueCommand). Goal activation is not verified.")
         } else {
             // 手动/自动失败都要明确反馈（辅助功能引导走 engine.onNeedAccessibility 通知，不自动弹系统设置）
             let reason = engine.lastFailureReason ?? "未知原因"
             notify(title: "继续失败", body: "「\(paused.title)」\n\(reason)")
         }
+        return ok
     }
 
     /// 手动立即继续：对所有勾选的对话（暂停 + 全部）执行继续
     func manualContinue() async {
+        guard !continuationInProgress else { return }
+        continuationInProgress = true
+        defer { continuationInProgress = false }
         refreshPausedThreads()
         let targets = selectedTargets()
         guard !targets.isEmpty else {
@@ -431,7 +447,10 @@ final class AppModel: ObservableObject {
             return
         }
         for paused in targets {
-            await continueOne(paused: paused, auto: false)
+            guard await continueOne(paused: paused, auto: false) else {
+                appendLog("发送未确认，停止后续对话操作", "Delivery not confirmed; stopping remaining chats in this batch")
+                return
+            }
         }
     }
 
