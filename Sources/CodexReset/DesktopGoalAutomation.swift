@@ -14,14 +14,8 @@ struct DesktopGoalAutomation {
     static let resumeLabels: Set<String> = ["目標を再開", "Resume goal", "Resume Goal", "恢复目标", "继续目标"]
 
     static func normalized(_ text: String) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    static func draftAction(value: String, command: String) throws -> Bool {
-        let value = normalized(value)
-        if value.isEmpty { return true } // Paste once.
-        if value == normalized(command) { return false } // Reuse the existing command.
-        throw desktopError("Composer contains different text. Nothing typed or sent; inspect the draft.")
+        let padding = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{200B}\u{FEFF}\u{2060}"))
+        return text.trimmingCharacters(in: padding)
     }
 
     func send(command: String) async throws {
@@ -88,15 +82,14 @@ struct DesktopGoalAutomation {
         // Only one visible multiline editor is accepted; never guess composer coordinates.
         let editors = elements(window).filter { string($0, kAXRoleAttribute) == kAXTextAreaRole && enabled($0) && rect($0) != nil }
         log("Composer preflight: thread=\(threadId), textAreas=\(editors.count)")
-        guard editors.count == 1, let editor = editors.first,
-              let value = attribute(editor, kAXValueAttribute) as? String else {
+        guard editors.count == 1, let editor = editors.first else {
             throw desktopError("Cannot identify one readable composer; nothing typed or sent")
         }
-        let shouldPaste = try Self.draftAction(value: value, command: command)
         try click(editor, within: window, maxDimension: 10000)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await Task.sleep(nanoseconds: 300_000_000)
         try verifyEditor(root, editor: editor)
-        if shouldPaste {
+        // Explicit user preference: replace any existing draft, without an emptiness check.
+        do {
             let clipboard = NSPasteboard.general
             let saved = clipboard.pasteboardItems?.map { item in
                 item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
@@ -114,17 +107,18 @@ struct DesktopGoalAutomation {
             }
             clipboard.clearContents()
             clipboard.setString(command, forType: .string)
+            try verifyFront(app, root: root, window: window, title: title)
+            try verifyEditor(root, editor: editor)
+            try key(0, flags: .maskCommand) // Select all in the verified composer.
+            try await Task.sleep(nanoseconds: 100_000_000)
+            try verifyEditor(root, editor: editor)
             try key(9, flags: .maskCommand)
             try await Task.sleep(nanoseconds: 500_000_000)
-        }
-        guard let actual = attribute(editor, kAXValueAttribute) as? String,
-              Self.normalized(actual) == Self.normalized(command) else {
-            throw desktopError("Composer text does not match command; Enter withheld")
         }
         try verifyFront(app, root: root, window: window, title: title)
         try verifyEditor(root, editor: editor)
         try key(36, flags: [])
-        log("Enter sent once: thread=\(threadId), reusedDraft=\(!shouldPaste)")
+        log("Enter sent once after replacing composer text: thread=\(threadId)")
     }
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

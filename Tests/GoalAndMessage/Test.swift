@@ -28,16 +28,8 @@ import SQLite3
         }
         let absent = try GoalState.read(codexHome: dir.path, threadId: "' OR 1=1 --")
         precondition(absent == nil)
-        let empty = try DesktopGoalAutomation.draftAction(value: "", command: "Continue")
-        precondition(empty)
-        let existing = try DesktopGoalAutomation.draftAction(value: "Continue\n", command: "Continue")
-        precondition(!existing, "Existing command must be reused without duplicate paste")
-        for draft in ["ContinueContinue", "My unsent draft"] {
-            do { _ = try DesktopGoalAutomation.draftAction(value: draft, command: "Continue"); fatalError("Expected draft protection") }
-            catch { }
-        }
         precondition(DesktopGoalAutomation.resumeLabels.contains("目標を再開"))
         precondition(!DesktopGoalAutomation.resumeLabels.contains("Resume"), "Generic buttons must not match")
-        print("PASS: paused/usage_limited resume, active sends, other states refuse; bound SQL; existing command reused; other drafts preserved. No live UI events executed.")
+        print("PASS: paused/usage_limited resume, active sends, other states refuse; bound SQL. No live UI events executed.")
     }
 }
