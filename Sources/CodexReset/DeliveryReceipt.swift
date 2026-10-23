@@ -43,7 +43,7 @@ struct DeliveryReceipt {
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let parts = obj["content"] as? [[String: Any]] else { continue }
             let text = parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
-            if text == command { return (maximum, true) }
+            if text.trimmingCharacters(in: .whitespacesAndNewlines) == command?.trimmingCharacters(in: .whitespacesAndNewlines) { return (maximum, true) }
         }
     }
 
