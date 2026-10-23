@@ -88,7 +88,7 @@ struct DesktopGoalAutomation {
         try click(editor, within: window, maxDimension: 10000)
         try await Task.sleep(nanoseconds: 300_000_000)
         try verifyEditor(root, editor: editor)
-        // Explicit user preference: replace any existing draft, without an emptiness check.
+        // Explicit user preference: keep existing text and append the command without an emptiness check.
         do {
             let clipboard = NSPasteboard.general
             let saved = clipboard.pasteboardItems?.map { item in
@@ -109,7 +109,8 @@ struct DesktopGoalAutomation {
             clipboard.setString(command, forType: .string)
             try verifyFront(app, root: root, window: window, title: title)
             try verifyEditor(root, editor: editor)
-            try key(0, flags: .maskCommand) // Select all in the verified composer.
+            try key(124, flags: .maskCommand) // Move to end of line.
+            try key(125, flags: .maskCommand) // Move to end of the composer without selecting.
             try await Task.sleep(nanoseconds: 100_000_000)
             try verifyEditor(root, editor: editor)
             try key(9, flags: .maskCommand)
@@ -118,7 +119,7 @@ struct DesktopGoalAutomation {
         try verifyFront(app, root: root, window: window, title: title)
         try verifyEditor(root, editor: editor)
         try key(36, flags: [])
-        log("Enter sent once after replacing composer text: thread=\(threadId)")
+        log("Enter sent once after appending command: thread=\(threadId)")
     }
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

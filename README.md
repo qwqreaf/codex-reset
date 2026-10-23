@@ -7,7 +7,7 @@ This is [ryoma-oss's fork](https://github.com/ryoma-oss/codex-reset) of
 
 GUI sends use **Enter**. Codex must be configured to send messages with Enter.
 Before typing, the app reads the target chat's last user-message ordinal from
-local history. It reports success only after a new matching message appears in
+local history. It reports success only after a new user message ending with the configured command appears in
 that same chat within 15 seconds. This confirms delivery, not execution or Goal
 activation. Delayed history writes may cause an unconfirmed result even when the
 message was sent; inspect the chat before retrying. There is no automatic retry; unconfirmed delivery stops the rest of that batch.
@@ -58,7 +58,7 @@ chat names, configured commands and error details; they stay on this Mac.
 
 **Goal resume + message:** **Resume Goal before sending** is enabled by default in Settings. The app verifies the target chat through an exact window title or a selected accessibility item, clicks one uniquely labeled resume button for a `paused`/`usage_limited` Goal, waits up to 15 seconds for the same Goal to become `active`, and only then sends the command. Already-active Goals skip the button. Chats without a local Goal only receive the command; other Goal states stop the batch. Goal databases are read-only; no app-server thread writer is acquired.
 
-This feature requires Accessibility permission and depends on Codex's accessibility tree. Japanese `目標を再開`, English `Resume goal`, and Chinese labels are supported. Missing/ambiguous controls, changed focus, or unconfirmed activation stop the operation before Continue. Composer identification requires one enabled multiline editor. At the user’s explicit request, the app selects all in the verified composer and replaces any existing draft with the configured command before pressing Enter. It does not require the composer to be empty and does not use its accessibility value as a send prerequisite. Any existing draft is overwritten. The developer's computer-use tool cannot control Codex itself: **the new UI path has not yet been validated end to end**. Initial testing must be performed by the user with one selected chat. Some upstream notifications remain Chinese with English selected.
+This feature requires Accessibility permission and depends on Codex's accessibility tree. Japanese `目標を再開`, English `Resume goal`, and Chinese labels are supported. Missing/ambiguous controls, changed focus, or unconfirmed activation stop the operation before Continue. Composer identification requires one enabled multiline editor. At the user’s explicit request, the app keeps the existing draft, moves to the end of the verified composer, appends the configured command, and presses Enter. It does not check whether the composer is empty. Delivery confirmation accepts a new user message ending with the command, including a combined draft-plus-command message. The developer's computer-use tool cannot control Codex itself: **the new UI path has not yet been validated end to end**. Initial testing must be performed by the user with one selected chat. Some upstream notifications remain Chinese with English selected.
 
 <img width="1280" height="258" alt="image" src="https://github.com/user-attachments/assets/766c58f1-5264-469b-b641-bfe8787caefa" />
 
