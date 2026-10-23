@@ -18,67 +18,59 @@ struct DesktopGoalAutomation {
         return text.trimmingCharacters(in: padding)
     }
 
-    func send(command: String) async throws {
-        guard !Self.normalized(command).isEmpty else { throw desktopError("Command is empty") }
-        let chats = SQLiteReader(codexHome: codexHome).allThreads()
-        guard let title = chats.first(where: { $0.threadId == threadId })?.title,
-              chats.filter({ $0.title == title }).count == 1 else {
-            throw desktopError("Target chat title is missing or ambiguous. Nothing clicked or typed.")
+    func resumeGoalIfNeeded() async throws -> ResumeStep {
+        guard resumeGoal else { return .skipped("disabled") }
+        guard let original = try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log) else {
+            return .skipped("no Goal")
         }
-        let original = try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log)
-        if resumeGoal, let original, original.action == .refuse {
-            throw desktopError("Goal status=\(original.status); only paused/usage_limited Goals can be resumed. Nothing sent.")
+        if original.status == "active" { return .skipped("already active") }
+        guard original.action == .resume else { return .skipped("status=\(original.status)") }
+        let (app, root, window, title) = try await openVerifiedTarget()
+        guard try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log) == original else {
+            throw desktopError("Goal changed before click; stopped")
         }
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").first,
-              let url = URL(string: "codex://threads/\(threadId)") else { throw desktopError("Codex is not running") }
-        guard NSWorkspace.shared.open(url) else { throw desktopError("Cannot open target chat") }
-        app.activate(options: [.activateIgnoringOtherApps])
-        let root = AXUIElementCreateApplication(app.processIdentifier)
-        var target: AXUIElement?
+        var candidates: [AXUIElement] = []
         for _ in 0..<20 {
-            if let window = focusedWindow(root), identifies(window, title: title) { target = window; break }
-            try await Task.sleep(nanoseconds: 500_000_000)
-        }
-        guard let window = target else {
-            let title = focusedWindow(root).map { string($0, kAXTitleAttribute) } ?? "<none>"
-            log("Target verification failed: focusedWindow=\(title). Nothing clicked or typed.")
-            throw desktopError("Cannot verify target chat by window title or selected sidebar item")
-        }
-        try verifyFront(app, root: root, window: window, title: title)
-        if resumeGoal, let original, original.action == .resume {
-            guard try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log) == original else {
-                throw desktopError("Goal changed before click; stopped")
-            }
-            let candidates = elements(window).filter { element in
+            try verifyFront(app, root: root, window: window, title: title)
+            candidates = elements(window).filter { element in
                 string(element, kAXRoleAttribute) == kAXButtonRole && enabled(element) &&
                 [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute].contains {
                     Self.resumeLabels.contains(Self.normalized(string(element, $0)))
                 }
             }
-            log("Goal resume preflight: thread=\(threadId), goal=\(original.id), status=\(original.status), matchingButtons=\(candidates.count)")
-            guard candidates.count == 1, let button = candidates.first else {
-                throw desktopError("Expected one enabled Goal resume button; found \(candidates.count). Nothing clicked or typed.")
+            if candidates.count == 1 { break }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        if candidates.count != 1 {
+            let related = elements(window).filter { string($0, kAXRoleAttribute) == kAXButtonRole }.compactMap { item -> String? in
+                let label = [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute].map { string(item, $0) }.joined(separator: " / ")
+                guard ["resume", "再開", "恢复", "继续"].contains(where: { label.lowercased().contains($0) }) else { return nil }
+                return "\(label.prefix(160)) [enabled=\(enabled(item))]"
             }
-            try verifyFront(app, root: root, window: window, title: title)
-            try click(button, within: window, maxDimension: 200)
-            log("Goal resume button clicked once: thread=\(threadId), goal=\(original.id)")
-            var active = false
-            for _ in 0..<30 {
-                let current = try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log)
-                guard current?.id == original.id else { throw desktopError("Goal was replaced or removed after click; Continue withheld") }
-                if current?.status == "active" { active = true; break }
-                try await Task.sleep(nanoseconds: 500_000_000)
-            }
-            guard active else { throw desktopError("Goal activation unconfirmed after 15s; Continue withheld. No automatic retry.") }
-            log("Goal active confirmed: thread=\(threadId), goal=\(original.id)")
-        } else {
-            log("Goal resume click skipped: thread=\(threadId), status=\(original?.status ?? "no-goal"), enabled=\(resumeGoal)")
+            log("Goal resume related controls: \(related.prefix(12).joined(separator: "; "))")
+        }
+        log("Goal resume preflight: thread=\(threadId), goal=\(original.id), status=\(original.status), matchingButtons=\(candidates.count)")
+        guard candidates.count == 1, let button = candidates.first else {
+            throw desktopError("Expected one enabled Goal resume button; found \(candidates.count). Nothing clicked or typed.")
         }
         try verifyFront(app, root: root, window: window, title: title)
-        if resumeGoal, let original {
+        try click(button, within: window, maxDimension: 200)
+        log("Goal resume button clicked once: thread=\(threadId), goal=\(original.id)")
+        var active = false
+        for _ in 0..<30 {
             let current = try GoalState.read(codexHome: codexHome, threadId: threadId, onRetry: log)
-            guard current?.id == original.id, current?.status == "active" else { throw desktopError("Goal is no longer active; Continue withheld") }
+            guard current?.id == original.id else { throw desktopError("Goal was replaced or removed after click; Goal confirmation stopped") }
+            if current?.status == "active" { active = true; break }
+            try await Task.sleep(nanoseconds: 500_000_000)
         }
+        guard active else { throw desktopError("Goal activation unconfirmed after 15s; Goal confirmation stopped. No automatic retry.") }
+        log("Goal active confirmed: thread=\(threadId), goal=\(original.id)")
+        return .succeeded
+    }
+
+    func send(command: String) async throws {
+        guard !Self.normalized(command).isEmpty else { throw desktopError("Command is empty") }
+        let (app, root, window, title) = try await openVerifiedTarget()
         // Only one visible multiline editor is accepted; never guess composer coordinates.
         let editors = elements(window).filter { string($0, kAXRoleAttribute) == kAXTextAreaRole && enabled($0) && rect($0) != nil }
         log("Composer preflight: thread=\(threadId), textAreas=\(editors.count)")
@@ -120,6 +112,31 @@ struct DesktopGoalAutomation {
         try verifyEditor(root, editor: editor)
         try key(36, flags: [])
         log("Enter sent once after appending command: thread=\(threadId)")
+    }
+
+    private func openVerifiedTarget() async throws -> (NSRunningApplication, AXUIElement, AXUIElement, String) {
+        let chats = SQLiteReader(codexHome: codexHome).allThreads()
+        guard let title = chats.first(where: { $0.threadId == threadId })?.title,
+              chats.filter({ $0.title == title }).count == 1 else {
+            throw desktopError("Target chat title is missing or ambiguous. Nothing clicked or typed.")
+        }
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").first,
+              let url = URL(string: "codex://threads/\(threadId)") else { throw desktopError("Codex is not running") }
+        guard NSWorkspace.shared.open(url) else { throw desktopError("Cannot open target chat") }
+        app.activate(options: [.activateIgnoringOtherApps])
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        var target: AXUIElement?
+        for _ in 0..<20 {
+            if let window = focusedWindow(root), identifies(window, title: title) { target = window; break }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        guard let window = target else {
+            let title = focusedWindow(root).map { string($0, kAXTitleAttribute) } ?? "<none>"
+            log("Target verification failed: focusedWindow=\(title). Nothing clicked or typed.")
+            throw desktopError("Cannot verify target chat by window title or selected sidebar item")
+        }
+        try verifyFront(app, root: root, window: window, title: title)
+        return (app, root, window, title)
     }
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

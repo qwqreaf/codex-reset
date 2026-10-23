@@ -55,6 +55,7 @@ final class AutoContinueEngine {
     var onNeedAccessibility: (() -> Void)?
     /// 最近一次继续失败的原因
     private(set) var lastFailureReason: String?
+    private(set) var lastDesktopSummary: String?
 
     init(codexHome: String) {
         self.codexHome = codexHome
@@ -75,6 +76,7 @@ final class AutoContinueEngine {
     func continueThread(client: AppServerClient?, threadId: String, command: String, fallbackToGUI: Bool, allowAppServer: Bool = true, resumeGoalBeforeSending: Bool = true) async -> Bool {
         var lastError = "无可用连接"
         lastFailureReason = nil
+        lastDesktopSummary = nil
 
         // The menu-bar app must never acquire a thread writer through an app-server.
         // Its server connection is for quota reads only; continuation uses the desktop UI.
@@ -110,32 +112,34 @@ final class AutoContinueEngine {
         if fallbackToGUI {
             if AppleScriptAutomation.hasAccessibilityPermission() {
                 do {
-                    let receipt = DeliveryReceipt(codexHome: codexHome)
-                    // Fail before typing if local delivery evidence cannot be read.
-                    let before = try receipt.snapshot(threadId: threadId)
-                    onLog?("开始 GUI 发送，等待聊天记录确认：\(threadId)",
-                           "GUI send attempt: thread=\(threadId), key=Enter, baseline=\(before)")
                     let automation = await DesktopGoalAutomation(
                         codexHome: codexHome, threadId: threadId, resumeGoal: resumeGoalBeforeSending,
                         log: { [weak self] message in self?.onLog?(message, message) })
-                    try await automation.send(command: command)
-                    var confirmed = false
-                    for _ in 0..<30 {
-                        if try receipt.received(threadId: threadId, command: command, after: before) {
-                            confirmed = true
-                            break
+                    let result = await ResumeAttempts.run(goal: {
+                        self.onLog?("开始独立的 Goal 恢复操作", "Goal path starting: thread=\(threadId)")
+                        return try await automation.resumeGoalIfNeeded()
+                    }, message: {
+                        self.onLog?("开始独立的 Continue 发送操作", "Continue path starting independently: thread=\(threadId)")
+                        let receipt = DeliveryReceipt(codexHome: self.codexHome)
+                        let before = try receipt.snapshot(threadId: threadId)
+                        self.onLog?("发送前聊天记录位置：\(before)", "GUI send baseline: thread=\(threadId), ordinal=\(before)")
+                        try await automation.send(command: command)
+                        for _ in 0..<30 {
+                            if try receipt.received(threadId: threadId, command: command, after: before) {
+                                self.onLog?("已确认目标聊天收到消息：\(threadId)", "Delivery confirmed in target chat: thread=\(threadId)")
+                                return
+                            }
+                            try await Task.sleep(nanoseconds: 500_000_000)
                         }
-                        try await Task.sleep(nanoseconds: 500_000_000)
+                        throw desktopError("Message delivery unconfirmed after 15s. No automatic resend; inspect the composer before retrying.")
+                    })
+                    lastDesktopSummary = result.summary
+                    onLog?(result.summary, result.summary)
+                    if result.anySucceeded {
+                        recoveryCycle.confirm(threadId)
+                        return true
                     }
-                    guard confirmed else {
-                        throw NSError(domain: "CodexReset.Delivery", code: 1,
-                            userInfo: [NSLocalizedDescriptionKey:
-                                "Delivery unconfirmed: no new matching message in target chat after 15s. Nothing will be retried automatically; inspect the composer before retrying."])
-                    }
-                    onLog?("已确认目标聊天收到消息：\(threadId)",
-                           "Delivery confirmed in target chat: thread=\(threadId), command=\(command)")
-                    recoveryCycle.confirm(threadId)
-                    return true
+                    lastError = result.summary
                 } catch {
                     lastError = "GUI 自动化失败: \(error)"
                 }

@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 @main struct Tests {
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -53,6 +53,29 @@ import SQLite3
         catch { precondition(error.localizedDescription.contains("no such table")) }
         precondition(DesktopGoalAutomation.resumeLabels.contains("目標を再開"))
         precondition(!DesktopGoalAutomation.resumeLabels.contains("Resume"), "Generic buttons must not match")
+        // Failure in either path must not gate the other path.
+        let failure = NSError(domain: "Test", code: 1, userInfo: [NSLocalizedDescriptionKey: "injected failure"])
+        for goalFails in [false, true] {
+            for messageFails in [false, true] {
+                var calls: [String] = []
+                let result = await ResumeAttempts.run(goal: {
+                    calls.append("goal")
+                    if goalFails { throw failure }
+                    return .succeeded
+                }, message: {
+                    calls.append("message")
+                    if messageFails { throw failure }
+                })
+                precondition(calls == ["goal", "message"])
+                precondition(result.goal.succeeded == !goalFails)
+                precondition(result.message.succeeded == !messageFails)
+                precondition(result.anySucceeded == (!goalFails || !messageFails))
+            }
+        }
+        var sentWithoutGoal = false
+        let skipped = await ResumeAttempts.run(goal: { .skipped("no Goal") }, message: { sentWithoutGoal = true })
+        precondition(sentWithoutGoal && skipped.message.succeeded)
+        print("PASS: independent paths: Goal read/button failures cannot block message; message failure preserves Goal success; both failures recorded; no-Goal still sends")
         print("PASS: paused/usage_limited resume, active sends, other states refuse; bound SQL. No live UI events executed.")
     }
 }

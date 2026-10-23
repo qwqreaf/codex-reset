@@ -66,9 +66,9 @@ struct SettingsPanelView: View {
             Divider()
                 .overlay(Color.black.opacity(0.05))
 
-            Toggle(L("先恢复目标，再发送指令", "Resume Goal before sending"), isOn: $model.resumeGoalBeforeSending)
+            Toggle(L("恢复目标并发送指令", "Try Goal resume + send command"), isOn: $model.resumeGoalBeforeSending)
                 .font(.subheadline)
-            Text(L("点击暂停目标的恢复按钮，确认 active 后再发送。没有目标时仅发送指令。", "Click a paused Goal's resume button, confirm active, then send the command. Chats without a Goal only receive the command."))
+            Text(L("目标恢复和指令发送独立尝试。目标恢复失败时仍发送指令。", "Try Goal resume and command delivery independently. A Goal failure does not prevent sending the command."))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

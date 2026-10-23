@@ -10,7 +10,7 @@ Before typing, the app reads the target chat's last user-message ordinal from
 local history. It reports success only after a new user message ending with the configured command appears in
 that same chat within 15 seconds. This confirms delivery, not execution or Goal
 activation. Delayed history writes may cause an unconfirmed result even when the
-message was sent; inspect the chat before retrying. There is no automatic retry; unconfirmed delivery stops the rest of that batch.
+message was sent; inspect the chat before retrying. There is no automatic retry; a failed chat does not stop the remaining selected chats.
 The handled-chat set resets when quota transitions from limited to available,
 so a previous manual test does not suppress a later recovery cycle. Overlapping
 manual and automatic batches are blocked. Target and editor focus are checked before input; missing or ambiguous accessibility controls stop the operation.
@@ -25,7 +25,7 @@ swiftc -lsqlite3 Sources/CodexReset/DeliveryReceipt.swift Tests/DeliveryReceipt/
 Goal-state regression checks (no live UI input):
 
 ```bash
-swiftc -parse-as-library -lsqlite3 Sources/CodexReset/GoalState.swift Sources/CodexReset/DesktopGoalAutomation.swift Sources/CodexReset/SQLiteReader.swift Tests/GoalAndMessage/Test.swift -o /tmp/codexreset-goal-test
+swiftc -parse-as-library -lsqlite3 Sources/CodexReset/GoalState.swift Sources/CodexReset/ResumeAttempts.swift Sources/CodexReset/DesktopGoalAutomation.swift Sources/CodexReset/SQLiteReader.swift Tests/GoalAndMessage/Test.swift -o /tmp/codexreset-goal-test
 /tmp/codexreset-goal-test
 ```
 
@@ -56,9 +56,9 @@ chat names, configured commands and error details; they stay on this Mac.
 - Fix unreadable settings colors.
 - Show five-hour **remaining** percentage and ring in the menu bar; the panel still shows usage. Reset countdown is in the menu-bar tooltip.
 
-**Goal resume + message:** **Resume Goal before sending** is enabled by default in Settings. The app verifies the target chat through an exact window title or a selected accessibility item, clicks one uniquely labeled resume button for a `paused`/`usage_limited` Goal, waits up to 15 seconds for the same Goal to become `active`, and only then sends the command. Already-active Goals skip the button. Chats without a local Goal only receive the command; other Goal states stop the batch. Goal databases are read-only; no app-server thread writer is acquired. Transient SQLite busy/locked/schema/protocol/read-only failures are retried up to three times by reopening the connection; detailed SQLite errors and retries are logged. Persistent read failures stop before any UI action.
+**Goal resume + message:** **Try Goal resume + send command** is enabled by default in Settings. The app makes two independent attempts, first Goal resume and then command delivery. It verifies the target chat through an exact window title or selected accessibility item. The Goal path clicks one uniquely labeled resume button for a `paused`/`usage_limited` Goal and waits up to 15 seconds for the same Goal to become `active`. Its failure never blocks the command path: a Goal DB error, missing button, or unconfirmed activation is recorded and the app still tries to send the command. Already-active/no-Goal/other Goal states skip the button. Each path reports its own result; one confirmed path counts as partial success. Failed chats do not stop the remaining selected chats. Goal databases are read-only; no app-server thread writer is acquired. Transient SQLite busy/locked/schema/protocol/read-only failures are retried up to three times by reopening the connection; detailed SQLite errors and retries are logged. Persistent Goal read failures are logged; the independent command attempt still proceeds.
 
-This feature requires Accessibility permission and depends on Codex's accessibility tree. Japanese `目標を再開`, English `Resume goal`, and Chinese labels are supported. Missing/ambiguous controls, changed focus, or unconfirmed activation stop the operation before Continue. Composer identification requires one enabled multiline editor. At the user’s explicit request, the app keeps the existing draft, moves to the end of the verified composer, appends the configured command, and presses Enter. It does not check whether the composer is empty. Delivery confirmation accepts a new user message ending with the command, including a combined draft-plus-command message. The developer's computer-use tool cannot control Codex itself: **the new UI path has not yet been validated end to end**. Initial testing must be performed by the user with one selected chat. Some upstream notifications remain Chinese with English selected.
+This feature requires Accessibility permission and depends on Codex's accessibility tree. Japanese `目標を再開`, English `Resume goal`, and Chinese labels are supported. Missing/ambiguous Goal controls or unconfirmed activation fail the Goal path only. Each path independently verifies the target chat and focus before its own input. Goal button matching waits up to 10 seconds for content to load; unmatched resume-related labels and enabled state are logged. Composer identification requires one enabled multiline editor. At the user’s explicit request, the app keeps the existing draft, moves to the end of the verified composer, appends the configured command, and presses Enter. It does not check whether the composer is empty. Delivery confirmation accepts a new user message ending with the command, including a combined draft-plus-command message. The developer's computer-use tool cannot control Codex itself: **the new UI path has not yet been validated end to end**. Initial testing must be performed by the user with one selected chat. Some upstream notifications remain Chinese with English selected.
 
 <img width="1280" height="258" alt="image" src="https://github.com/user-attachments/assets/766c58f1-5264-469b-b641-bfe8787caefa" />
 

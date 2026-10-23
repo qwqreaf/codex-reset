@@ -408,9 +408,8 @@ final class AppModel: ObservableObject {
                 appendLog("已处理过「\(paused.title)」，跳过", "Already handled \"\(paused.title)\"; skipping")
                 continue
             }
-            guard await continueOne(paused: paused, auto: true) else {
-                appendLog("发送未确认，停止后续对话操作", "Delivery not confirmed; stopping remaining chats in this batch")
-                return
+            if !(await continueOne(paused: paused, auto: true)) {
+                appendLog("本对话未确认成功，继续其他已选对话", "Neither path confirmed for this chat; continuing with remaining selected chats")
             }
         }
     }
@@ -431,7 +430,7 @@ final class AppModel: ObservableObject {
         )
         isWorking = false
         if ok {
-            notify(title: "Message delivery confirmed", body: "\(paused.title): \(continueCommand). See activity log for Goal state.")
+            notify(title: "Resume result", body: "\(paused.title)\n\(engine.lastDesktopSummary ?? "Command accepted")")
         } else {
             // 手动/自动失败都要明确反馈（辅助功能引导走 engine.onNeedAccessibility 通知，不自动弹系统设置）
             let reason = engine.lastFailureReason ?? "未知原因"
@@ -452,9 +451,8 @@ final class AppModel: ObservableObject {
             return
         }
         for paused in targets {
-            guard await continueOne(paused: paused, auto: false) else {
-                appendLog("发送未确认，停止后续对话操作", "Delivery not confirmed; stopping remaining chats in this batch")
-                return
+            if !(await continueOne(paused: paused, auto: false)) {
+                appendLog("本对话未确认成功，继续其他已选对话", "Neither path confirmed for this chat; continuing with remaining selected chats")
             }
         }
     }
