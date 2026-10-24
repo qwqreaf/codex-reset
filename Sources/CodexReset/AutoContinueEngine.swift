@@ -40,10 +40,22 @@ struct AppleScriptAutomation {
     }
 }
 
-/// 自动继续引擎：
-/// - Path A（首选）：连接桌面 app 的 app-server（remote_control），thread/resume + turn/start("继续")
-/// - Path A 失效（无 socket / active writer / 未初始化）：回退 Path B（AppleScript GUI 自动化）
-final class AutoContinueEngine {
+/// Desktop dispatch is abstracted so recovery tests can record delivery requests
+/// without taking focus or typing into real chats.
+protocol ContinuationEngine: AnyObject {
+    var onLog: ((String, String) -> Void)? { get set }
+    var onNeedRestartCodex: (() -> Void)? { get set }
+    var onNeedAccessibility: (() -> Void)? { get set }
+    var lastFailureReason: String? { get }
+    var lastDesktopSummary: String? { get }
+    func alreadyHandled(_ threadId: String) -> Bool
+    func beginRecoveryCycle()
+    func continueThread(client: AppServerClient?, threadId: String, command: String,
+                        fallbackToGUI: Bool, allowAppServer: Bool, resumeGoalBeforeSending: Bool) async -> Bool
+}
+
+/// Menu-bar recovery uses the desktop UI; the optional CLI keeps its app-server path.
+final class AutoContinueEngine: ContinuationEngine {
     let codexHome: String
     /// 已处理过的线程，避免重复继续
     private var recoveryCycle = RecoveryCycle()
