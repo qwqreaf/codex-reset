@@ -120,10 +120,7 @@ struct DesktopGoalAutomation {
               chats.filter({ $0.title == title }).count == 1 else {
             throw desktopError("Target chat title is missing or ambiguous. Nothing clicked or typed.")
         }
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex").first,
-              let url = URL(string: "codex://threads/\(threadId)") else { throw desktopError("Codex is not running") }
-        guard NSWorkspace.shared.open(url) else { throw desktopError("Cannot open target chat") }
-        app.activate(options: [.activateIgnoringOtherApps])
+        let app = try await DesktopAppLauncher.open(threadId: threadId)
         let root = AXUIElementCreateApplication(app.processIdentifier)
         var target: AXUIElement?
         for _ in 0..<20 {

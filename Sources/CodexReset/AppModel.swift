@@ -21,26 +21,28 @@ final class AppModel: ObservableObject {
     /// 所有对话（含未暂停），可按项目勾选任意对话参与自动继续
     @Published var allThreads: [PausedThread] = []
     /// 勾选、需要在恢复后自动继续的对话
-    @Published var selectedThreadIds: Set<String> = []
+    @Published var selectedThreadIds: Set<String> = [] {
+        didSet { defaults.set(selectedThreadIds.sorted(), forKey: "selectedThreadIds") }
+    }
     @Published var logLines: [LogEntry] = []
     @Published var logArchiveError: String?
-    let activityLogStore = ActivityLogStore()
+    let activityLogStore: ActivityLogStore
     private let visibleLogLimit = 1000
     @Published var autoContinue: Bool {
-        didSet { UserDefaults.standard.set(autoContinue, forKey: "autoContinue") }
+        didSet { defaults.set(autoContinue, forKey: "autoContinue") }
     }
     @Published var continueCommand: String {
-        didSet { UserDefaults.standard.set(continueCommand, forKey: "continueCommand") }
+        didSet { defaults.set(continueCommand, forKey: "continueCommand") }
     }
     @Published var resumeGoalBeforeSending: Bool {
-        didSet { UserDefaults.standard.set(resumeGoalBeforeSending, forKey: "resumeGoalBeforeSending") }
+        didSet { defaults.set(resumeGoalBeforeSending, forKey: "resumeGoalBeforeSending") }
     }
     @Published var isWorking = false
     @Published var remoteControlEnabled: Bool
     /// 语言设置：system / zh / en（切换后写回 UserDefaults 并通过 objectWillChange 触发界面刷新）
     @Published var language: String {
         didSet {
-            UserDefaults.standard.set(language, forKey: "language")
+            defaults.set(language, forKey: "language")
             // 默认指令跟随语言：仅当指令仍为内置默认值（继续/Continue）时自动同步切换，用户自定义指令不受影响
             if continueCommand == "继续" || continueCommand == "Continue" {
                 continueCommand = L("继续", "Continue")
@@ -55,30 +57,44 @@ final class AppModel: ObservableObject {
     let codexHome: String
     let manager: AppServerManager
     private let reader: SQLiteReader
-    private let engine: AutoContinueEngine
+    private let engine: any ContinuationEngine
+    private let defaults: UserDefaults
+    private let now: () -> Date
+    private let notification: ((String, String) -> Void)?
     private var client: AppServerClient?
     private var timer: Timer?
     /// 记录上一次是否处于「已到上限」状态，用于恢复检测
     private var wasLimited = false
+    private var hasObservedQuota = false
     private var continuationInProgress = false
 
-    init(codexHome: String = AppModel.defaultCodexHome()) {
+    init(codexHome: String = AppModel.defaultCodexHome(),
+         engine: (any ContinuationEngine)? = nil,
+         defaults: UserDefaults = .standard,
+         activityLogStore: ActivityLogStore = ActivityLogStore(),
+         now: @escaping () -> Date = Date.init,
+         notification: ((String, String) -> Void)? = nil) {
         self.codexHome = codexHome
         self.manager = AppServerManager(codexHome: codexHome)
         self.reader = SQLiteReader(codexHome: codexHome)
-        self.engine = AutoContinueEngine(codexHome: codexHome)
-        self.resumeGoalBeforeSending = UserDefaults.standard.object(forKey: "resumeGoalBeforeSending") as? Bool ?? true
-        self.autoContinue = UserDefaults.standard.object(forKey: "autoContinue") as? Bool ?? true
-        self.continueCommand = UserDefaults.standard.string(forKey: "continueCommand") ?? L("继续", "Continue")
+        self.engine = engine ?? AutoContinueEngine(codexHome: codexHome)
+        self.activityLogStore = activityLogStore
+        self.defaults = defaults
+        self.now = now
+        self.notification = notification
+        self.selectedThreadIds = Set(defaults.stringArray(forKey: "selectedThreadIds") ?? [])
+        self.resumeGoalBeforeSending = defaults.object(forKey: "resumeGoalBeforeSending") as? Bool ?? true
+        self.autoContinue = defaults.object(forKey: "autoContinue") as? Bool ?? true
+        self.continueCommand = defaults.string(forKey: "continueCommand") ?? L("继续", "Continue")
         self.remoteControlEnabled = CodexConfig.load(codexHome: codexHome).remoteControlEnabled
-        self.language = UserDefaults.standard.string(forKey: "language") ?? "system"
-        engine.onLog = { [weak self] zh, en in
+        self.language = defaults.string(forKey: "language") ?? "system"
+        self.engine.onLog = { [weak self] zh, en in
             Task { @MainActor in self?.appendLog(zh, en) }
         }
-        engine.onNeedRestartCodex = { [weak self] in
+        self.engine.onNeedRestartCodex = { [weak self] in
             Task { @MainActor in self?.notifyRestartCodex() }
         }
-        engine.onNeedAccessibility = { [weak self] in
+        self.engine.onNeedAccessibility = { [weak self] in
             Task { @MainActor in self?.notifyNeedAccessibility() }
         }
         loadResetHistory()
@@ -162,7 +178,7 @@ final class AppModel: ObservableObject {
             client: client,
             threadId: threadId,
             command: continueCommand,
-            fallbackToGUI: false
+            fallbackToGUI: false, allowAppServer: true, resumeGoalBeforeSending: resumeGoalBeforeSending
         )
         print("continueResult=\(ok)")
         manager.stopOwnServer()
@@ -282,14 +298,19 @@ final class AppModel: ObservableObject {
     private func refreshRateLimits(client: AppServerClient) async {
         do {
             let rl = try await client.requestDecoded("account/rateLimits/read", as: AccountRateLimits.self)
-            rateLimits = rl
-            lastError = nil
-            checkRecovery(rl)
-            trackWindowReset(rl)
+            await applyRateLimits(rl)
         } catch {
             lastError = "读取用量失败: \(error)"
             appendLog("读取用量失败: \(error)", "Failed to read usage: \(error)")
         }
+    }
+
+    /// Shared ingestion path for live responses and deterministic recovery tests.
+    func applyRateLimits(_ rl: AccountRateLimits) async {
+        rateLimits = rl
+        lastError = nil
+        trackWindowReset(rl)
+        await checkRecovery(rl)
     }
 
     // MARK: - 用量历史（5h 窗口时间线）
@@ -326,7 +347,7 @@ final class AppModel: ObservableObject {
     }
 
     private func loadResetHistory() {
-        guard let data = UserDefaults.standard.data(forKey: "usageResetHistory"),
+        guard let data = defaults.data(forKey: "usageResetHistory"),
               let history = try? JSONDecoder().decode([UsageResetEvent].self, from: data) else {
             return
         }
@@ -335,7 +356,7 @@ final class AppModel: ObservableObject {
 
     private func saveResetHistory() {
         if let data = try? JSONEncoder().encode(resetHistory) {
-            UserDefaults.standard.set(data, forKey: "usageResetHistory")
+            defaults.set(data, forKey: "usageResetHistory")
         }
     }
 
@@ -363,22 +384,20 @@ final class AppModel: ObservableObject {
     }
 
     /// 用量恢复检测 + 自动继续
-    private func checkRecovery(_ rl: AccountRateLimits) {
-        let now = Int(Date().timeIntervalSince1970)
+    private func checkRecovery(_ rl: AccountRateLimits) async {
         let primary = rl.rateLimits.primary
-        let isLimited = (rl.rateLimits.rateLimitReachedType != nil &&
-                         rl.rateLimits.rateLimitReachedType != "none") ||
-                        (primary?.usedPercent ?? 0) >= 100
-        let recovered = wasLimited && !isLimited
+        let availability = QuotaAvailability.evaluate(rl.rateLimits, now: now())
+        guard availability != .unknown else { return }
+        let recovered = availability.canContinue && (wasLimited || (!hasObservedQuota && availability == .reset))
 
+        wasLimited = !availability.canContinue
+        hasObservedQuota = true
         if recovered {
             engine.beginRecoveryCycle()
             appendLog("检测到用量恢复！usedPercent=\(primary?.usedPercent ?? -1)%", "Usage recovered! usedPercent=\(primary?.usedPercent ?? -1)%")
             notify(title: "Codex 用量已恢复", body: "正在自动继续上次暂停的对话…")
-            Task { await autoContinueIfNeeded() }
+            await autoContinueIfNeeded()
         }
-        wasLimited = isLimited
-        _ = now
     }
 
     /// 到点自动继续：对所有勾选的对话（暂停 + 全部）逐个发送「继续」
@@ -397,8 +416,7 @@ final class AppModel: ObservableObject {
             return
         }
         let primary = rateLimits?.rateLimits.primary
-        let isRecovered = (primary?.usedPercent ?? 0) < 100 ||
-                          (primary?.resetsAt ?? Int.max) <= Int(Date().timeIntervalSince1970)
+        let isRecovered = rateLimits.map { QuotaAvailability.evaluate($0.rateLimits, now: now()).canContinue } ?? false
         guard isRecovered else {
             appendLog("用量尚未恢复（\(primary?.usedPercent ?? -1)%），等待中…", "Usage not recovered yet (\(primary?.usedPercent ?? -1)%), waiting…")
             return
@@ -535,6 +553,7 @@ final class AppModel: ObservableObject {
     }
 
     private func notify(title: String, body: String) {
+        if let notification { notification(title, body); return }
         let escapedTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
         let escapedBody = body.replacingOccurrences(of: "\"", with: "\\\"")
         _ = try? AppleScriptAutomation.runAppleScript(

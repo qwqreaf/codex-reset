@@ -1,7 +1,36 @@
 # CodexReset
 
-This is [ryoma-oss's fork](https://github.com/ryoma-oss/codex-reset) of
+This is [qwqreaf's fork](https://github.com/qwqreaf/codex-reset) of
+[ryoma-oss/codex-reset](https://github.com/ryoma-oss/codex-reset), originally from
 [boyso/codex-reset](https://github.com/boyso/codex-reset). Original MIT license and attribution are retained.
+
+## Recovery after a quota reset
+
+Recovery detection and the automatic-send gate now use the same policy. An
+exhausted window whose `resetsAt` has passed permits one continuation attempt,
+even if the local app-server still returns the old 100% snapshot and ordinary
+`rate_limit_reached` flag. A future exhausted weekly window, an unknown reset
+deadline, or a workspace/spend restriction still blocks automatic continuation.
+Missing quota information does not count as recovery. Polling runs every 30
+seconds while the app is awake; reaching a reset deadline is an opportunity to
+try, not confirmation that the server accepted a new turn.
+
+Selected chat IDs now survive restarts (nothing is selected on first install).
+Opening a target chat now launches Codex through its deep link before waiting
+for the process and verifying the target UI. Enable auto-resume, select the chats
+to continue, and grant Accessibility permission to CodexReset.
+
+Run the recovery regression suite with:
+
+```bash
+bash Tests/run_recovery.sh
+```
+
+It drives the production quota ingestion, chat selection, recovery-cycle and
+desktop-channel dispatch code with a recording delivery engine. It also checks
+launch ordering with a simulated stopped app. It uses temporary storage and
+does not type into live chats. Real UI focus, Accessibility permissions, and
+message receipt must still be checked on the installed app.
 
 ## Desktop delivery verification
 
@@ -25,7 +54,7 @@ swiftc -lsqlite3 Sources/CodexReset/DeliveryReceipt.swift Tests/DeliveryReceipt/
 Goal-state regression checks (no live UI input):
 
 ```bash
-swiftc -parse-as-library -lsqlite3 Sources/CodexReset/GoalState.swift Sources/CodexReset/ResumeAttempts.swift Sources/CodexReset/DesktopGoalAutomation.swift Sources/CodexReset/SQLiteReader.swift Tests/GoalAndMessage/Test.swift -o /tmp/codexreset-goal-test
+swiftc -parse-as-library -lsqlite3 Sources/CodexReset/GoalState.swift Sources/CodexReset/ResumeAttempts.swift Sources/CodexReset/DesktopGoalAutomation.swift Sources/CodexReset/DesktopAppLauncher.swift Sources/CodexReset/SQLiteReader.swift Tests/GoalAndMessage/Test.swift -o /tmp/codexreset-goal-test
 /tmp/codexreset-goal-test
 ```
 
@@ -134,7 +163,7 @@ still uses its original app-server-first behavior.
 ### Build
 
 ```bash
-git clone https://github.com/ryoma-oss/codex-reset.git
+git clone https://github.com/qwqreaf/codex-reset.git
 cd codex-reset
 swift build -c release
 ```
